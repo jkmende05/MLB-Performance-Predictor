@@ -4,7 +4,7 @@ library(dplyr)
 batting_data <- Batting %>%
   filter(yearID >= 1995) %>%
   group_by(playerID, yearID) %>%
-  summarize(BA = sum(H) / sum(AB), HR = sum(HR), H = sum(H), X2B = sum(X2B),
+  summarize(G, BA = sum(H) / sum(AB), HR = sum(HR), H = sum(H), X2B = sum(X2B),
             X3B = sum(X3B), AB = sum(AB), R = sum(R), RBI = sum(RBI),
             BB = sum(BB), SO = sum(SO), SB = sum(SB),
             OBP = sum(H, BB, IBB, HBP) / sum(AB),
