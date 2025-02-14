@@ -6,6 +6,72 @@ player_data <- readRDS("data//player_cluster_data.rds")
 
 head(player_data)
 
+model_player_stats_two <- function(first_name, last_name, target_var) {
+  player_data <- player_data %>%
+    mutate(
+      Cluster = as.factor(Cluster),
+      nameFirst = as.factor(nameFirst),
+      nameLast = as.factor(nameLast),
+      bats = as.factor(bats),
+      throws = as.factor(throws)
+    )
+
+  player_data_clean <- player_data %>%
+    filter(!is.na(.[[target_var]]))
+
+  # Prepare the features (selecting relevant columns)
+  features <- player_data_clean %>%
+    select(BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
+    mutate(
+      Cluster = as.numeric(Cluster), # Convert the factor to numeric
+      nameFirst = as.numeric(nameFirst), # Encode 'nameFirst' to numeric
+      nameLast = as.numeric(nameLast)   # Encode 'nameLast' to numeric
+    )
+
+  target <- player_data_clean[[target_var]]
+  features <- features %>%
+    select(-all_of(target_var))
+
+  # Convert the data to a matrix for XGBoost
+  dtrain <- xgb.DMatrix(data = as.matrix(features), label = target)
+
+  # Set the XGBoost parameters
+  params <- list(
+    objective = "reg:squarederror", # Regression task (continuous output)
+    max_depth = 6,
+    eta = 0.1,
+    nthread = 2,
+    eval_metric = "rmse"
+  )
+
+  # Train the model
+  model_ba <- xgboost(
+    params = params,
+    data = dtrain,
+    nrounds = 200
+  )
+
+  # Prepare the features for prediction (use the same preprocessing steps as before)
+  predict_features <- player_data_clean %>%
+    filter(nameFirst == first_name, nameLast == last_name) %>%
+    select(BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
+    mutate(
+      Cluster = as.numeric(Cluster),
+      nameFirst = as.numeric(nameFirst),
+      nameLast = as.numeric(nameLast)
+    ) %>%
+    select(-all_of(target_var))
+  
+  # Convert the data to a matrix
+  predict_matrix <- as.matrix(predict_features)
+  predict_matrix
+  # Predict the target variable (BA in this case)
+  pred_ba <- predict(model_ba, predict_matrix)
+  return(pred_ba[1])
+}
+
+pred_ba <- model_player_stats_two("George", "Springer", "AB")
+pred_ba
 
 predict_stats <- function(first_name, last_name, current_year) {
   player_cluster <- player_data %>%
@@ -90,10 +156,10 @@ predict_stats <- function(first_name, last_name, current_year) {
   return(next_year_stats)
 }
 
-test <- predict_stats("Bo", "Bichette", 2024)
-test
+test <- predict_stats("George", "Springer", 2024)
+View(test)
 
 test_df <- player_data %>%
-  filter(nameFirst == "Bo", nameLast == "Bichette")
+  filter(nameFirst == "Vladimir", nameLast == "Guerrero")
 test_df
 View(test_df)
