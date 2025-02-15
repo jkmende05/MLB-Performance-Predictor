@@ -19,20 +19,11 @@ model_player_stats_two <- function(first_name, last_name, target_var) {
   player_data_clean <- player_data %>%
     filter(!is.na(.[[target_var]]))
 
-  # Rolling averages for historical trends
-  player_data_clean <- player_data_clean %>%
-    group_by(nameFirst, nameLast) %>%
-    mutate(
-      avg_HR = zoo::rollmean(HR, 3, fill = NA, align = "right"),
-      avg_AB = zoo::rollmean(AB, 3, fill = NA, align = "right")
-    ) %>% 
-    ungroup()
-
   # Feature selection (Cluster removed)
   features <- player_data_clean %>%
     select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG,
-           age, height, weight, avg_HR, avg_AB) %>%
-    mutate(across(c(age, height, weight, avg_HR, avg_AB), scale))  # Normalize
+           age, height, weight) %>%
+    mutate(across(c(age, height, weight), scale))  # Normalize
 
   # Define target and remove it from features
   target <- player_data_clean[[target_var]]
@@ -74,15 +65,13 @@ model_player_stats_two <- function(first_name, last_name, target_var) {
     mutate(
       yearID = latest_data$yearID + 1,  # Predict for next year
       age = latest_data$age + 1,  # Increase player's age
-      avg_HR = zoo::rollmean(c(latest_data$HR, latest_data$HR), 3, fill = NA, align = 'right')[2],  
-      avg_AB = zoo::rollmean(c(latest_data$AB, latest_data$AB), 3, fill = NA, align = 'right')[2]
     )
 
   # Prepare features for prediction
   predict_features <- next_year_data %>%
     select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG,
-           age, height, weight, avg_HR, avg_AB) %>%
-    mutate(across(c(age, height, weight, avg_HR, avg_AB), scale))
+           age, height, weight) %>%
+    mutate(across(c(age, height, weight), scale))
   predict_features <- predict_features %>% select(-all_of(target_var))
   # Convert to matrix
   predict_matrix <- as.matrix(predict_features)
@@ -93,7 +82,7 @@ model_player_stats_two <- function(first_name, last_name, target_var) {
   return(pred_value)
 }
 
-pred_ba <- model_player_stats_two("Alejandro", "Kirk", "HGR")
+pred_ba <- model_player_stats_two("Alejandro", "Kirk", "G")
 pred_ba
 
 predict_stats <- function(first_name, last_name, current_year) {
