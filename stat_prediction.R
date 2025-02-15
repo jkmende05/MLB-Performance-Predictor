@@ -7,81 +7,93 @@ player_data <- readRDS("data//player_cluster_data.rds")
 
 head(player_data)
 
+library(caret)  # For dummy variable encoding
+library(Metrics)  # For RMSE calculation
+
 model_player_stats_two <- function(first_name, last_name, target_var) {
   player_data <- player_data %>%
-    mutate(
-      Cluster = as.factor(Cluster),
-      nameFirst = as.factor(nameFirst),
-      nameLast = as.factor(nameLast),
-      bats = as.factor(bats),
-      throws = as.factor(throws)
-    )
+    mutate(bats = as.factor(bats),
+           throws = as.factor(throws))
 
+  # Remove players with missing target variable
   player_data_clean <- player_data %>%
     filter(!is.na(.[[target_var]]))
 
+  # Rolling averages for historical trends
   player_data_clean <- player_data_clean %>%
     group_by(nameFirst, nameLast) %>%
     mutate(
-      avg_HR = zoo::rollmean(HR, 3, fill = NA, align = 'right'), # 3-year rolling average of HR
-      avg_AB = zoo::rollmean(AB, 3, fill = NA, align = 'right')  # 3-year rolling average of AB
-    )
+      avg_HR = zoo::rollmean(HR, 3, fill = NA, align = "right"),
+      avg_AB = zoo::rollmean(AB, 3, fill = NA, align = "right")
+    ) %>% 
+    ungroup()
 
-  # Prepare the features (selecting relevant columns)
+  # Feature selection (Cluster removed)
   features <- player_data_clean %>%
-    select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
-    mutate(
-      Cluster = as.numeric(Cluster), # Convert the factor to numeric
-      nameFirst = as.numeric(nameFirst), # Encode 'nameFirst' to numeric
-      nameLast = as.numeric(nameLast)   # Encode 'nameLast' to numeric
-    )
+    select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG,
+           age, height, weight, avg_HR, avg_AB) %>%
+    mutate(across(c(age, height, weight, avg_HR, avg_AB), scale))  # Normalize
 
+  # Define target and remove it from features
   target <- player_data_clean[[target_var]]
-  features <- features %>%
-    select(-all_of(target_var))
+  features <- features %>% select(-all_of(target_var))
 
-  # Convert the data to a matrix for XGBoost
+  # Convert to matrix
   dtrain <- xgb.DMatrix(data = as.matrix(features), label = target)
 
-  # Set the XGBoost parameters
+  # XGBoost parameters
   params <- list(
-    objective = "reg:squarederror", # Regression task (continuous output)
-    max_depth = 6,
-    eta = 0.1,
-    nthread = 2,
+    objective = "reg:squarederror",
+    max_depth = 4,
+    eta = 0.05,  # Smaller learning rate
+    min_child_weight = 5,  # Prevents overfitting
+    subsample = 0.8,
+    colsample_bytree = 0.8,
     eval_metric = "rmse",
-    lambda = 1,  # L2 regularization
+    lambda = 1,
     alpha = 0.5
   )
 
-  # Train the model
-  model_ba <- xgboost(
-    params = params,
-    data = dtrain,
-    nrounds = 200,
-    verbose = 1
-  )
+  # Cross-validation to determine best rounds
+  xgb_cv <- xgb.cv(params = params, data = dtrain, nrounds = 500, nfold = 5,
+                    early_stopping_rounds = 10, verbose = 0)
 
-  # Prepare the features for prediction (use the same preprocessing steps as before)
-  predict_features <- player_data_clean %>%
+  best_nrounds <- xgb_cv$best_iteration
+
+  # Train final model
+  model <- xgboost(params = params, data = dtrain, nrounds = best_nrounds, verbose = 0)
+
+  # Get the latest stats of the player
+  latest_data <- player_data_clean %>%
     filter(nameFirst == first_name, nameLast == last_name) %>%
-    select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
+    arrange(desc(yearID)) %>%  # Ensure data is sorted by year
+    slice_head(n = 1)  # Get the latest available row
+
+  # Create a new row for next year
+  next_year_data <- latest_data %>%
     mutate(
-      Cluster = as.numeric(Cluster),
-      nameFirst = as.numeric(nameFirst),
-      nameLast = as.numeric(nameLast)
-    ) %>%
-    select(-all_of(target_var))
-  
-  # Convert the data to a matrix
+      yearID = latest_data$yearID + 1,  # Predict for next year
+      age = latest_data$age + 1,  # Increase player's age
+      avg_HR = zoo::rollmean(c(latest_data$HR, latest_data$HR), 3, fill = NA, align = 'right')[2],  
+      avg_AB = zoo::rollmean(c(latest_data$AB, latest_data$AB), 3, fill = NA, align = 'right')[2]
+    )
+
+  # Prepare features for prediction
+  predict_features <- next_year_data %>%
+    select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG,
+           age, height, weight, avg_HR, avg_AB) %>%
+    mutate(across(c(age, height, weight, avg_HR, avg_AB), scale))
+  predict_features <- predict_features %>% select(-all_of(target_var))
+  # Convert to matrix
   predict_matrix <- as.matrix(predict_features)
-  predict_matrix
-  # Predict the target variable (BA in this case)
-  pred_ba <- predict(model_ba, predict_matrix)
-  return(pred_ba[1])
+
+  # Predict next year's value
+  pred_value <- predict(model, predict_matrix)
+
+  return(pred_value)
 }
 
-pred_ba <- model_player_stats_two("Max", "Kepler", "AVG")
+pred_ba <- model_player_stats_two("Alejandro", "Kirk", "HGR")
 pred_ba
 
 predict_stats <- function(first_name, last_name, current_year) {
@@ -172,7 +184,7 @@ predict_stats <- function(first_name, last_name, current_year) {
   return(next_year_stats)
 }
 
-test <- predict_stats("Ronald", "Acuna", 2024)
+test <- predict_stats("Alejandro", "Kirk", 2024)
 View(test)
 
 test_df <- player_data %>%
