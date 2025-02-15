@@ -4,7 +4,7 @@ player_data <- readRDS("data//player_data.rds")
 head(player_data)
 
 cluster_features <- player_data %>%
-  select(height, weight, age, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB,
+  select(height, weight, age, BA, HR, H, X2B, X3B, AB, R, RBI, G, BB, SO, SB,
          OBP, SLG, bats, throws)
 
 str(cluster_features)
@@ -14,7 +14,7 @@ cluster_features <- cluster_features %>%
 scaled_data <- scale(cluster_features)
 
 set.seed(42)
-kmeans_model <- kmeans(scaled_data, centers = 400)
+kmeans_model <- kmeans(scaled_data, centers = 400, iter.max = 500)
 
 player_data$Cluster <- as.factor(kmeans_model$cluster)
 

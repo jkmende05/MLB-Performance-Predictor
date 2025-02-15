@@ -1,6 +1,7 @@
 library(xgboost)
 library(dplyr)
 library(tidyr)
+library(zoo)
 
 player_data <- readRDS("data//player_cluster_data.rds")
 
@@ -19,9 +20,16 @@ model_player_stats_two <- function(first_name, last_name, target_var) {
   player_data_clean <- player_data %>%
     filter(!is.na(.[[target_var]]))
 
+  player_data_clean <- player_data_clean %>%
+    group_by(nameFirst, nameLast) %>%
+    mutate(
+      avg_HR = zoo::rollmean(HR, 3, fill = NA, align = 'right'), # 3-year rolling average of HR
+      avg_AB = zoo::rollmean(AB, 3, fill = NA, align = 'right')  # 3-year rolling average of AB
+    )
+
   # Prepare the features (selecting relevant columns)
   features <- player_data_clean %>%
-    select(BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
+    select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
     mutate(
       Cluster = as.numeric(Cluster), # Convert the factor to numeric
       nameFirst = as.numeric(nameFirst), # Encode 'nameFirst' to numeric
@@ -41,20 +49,23 @@ model_player_stats_two <- function(first_name, last_name, target_var) {
     max_depth = 6,
     eta = 0.1,
     nthread = 2,
-    eval_metric = "rmse"
+    eval_metric = "rmse",
+    lambda = 1,  # L2 regularization
+    alpha = 0.5
   )
 
   # Train the model
   model_ba <- xgboost(
     params = params,
     data = dtrain,
-    nrounds = 200
+    nrounds = 200,
+    verbose = 1
   )
 
   # Prepare the features for prediction (use the same preprocessing steps as before)
   predict_features <- player_data_clean %>%
     filter(nameFirst == first_name, nameLast == last_name) %>%
-    select(BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
+    select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG, age, height, weight, Cluster, nameFirst, nameLast) %>%
     mutate(
       Cluster = as.numeric(Cluster),
       nameFirst = as.numeric(nameFirst),
@@ -70,7 +81,7 @@ model_player_stats_two <- function(first_name, last_name, target_var) {
   return(pred_ba[1])
 }
 
-pred_ba <- model_player_stats_two("George", "Springer", "AB")
+pred_ba <- model_player_stats_two("Max", "Kepler", "AVG")
 pred_ba
 
 predict_stats <- function(first_name, last_name, current_year) {
@@ -82,13 +93,15 @@ predict_stats <- function(first_name, last_name, current_year) {
     return(tibble(message = "Player not found"))
   }
 
+  cluster_value <- tail(player_cluster$Cluster, n = 1)
+
   similar_players <- player_data %>%
-    filter(Cluster == player_cluster$Cluster, yearID < current_year)
+    filter(Cluster == cluster_value, yearID < current_year)
 
   next_year_stats <- similar_players %>%
     group_by(next_year = yearID + 1) %>%
     summarize(
-      pred_ba = weighted.mean(BA, w = exp(yearID - min(yearID)), na.rm = TRUE),
+      pred_g = weighted.mean(G, w = exp(yearID - min(yearID)), na.rm = TRUE),
       pred_hr = weighted.mean(HR, w = exp(yearID - min(yearID)), na.rm = TRUE),
       pred_h = weighted.mean(H, w = exp(yearID - min(yearID)), na.rm = TRUE),
       pred_2b = weighted.mean(X2B, w = exp(yearID - min(yearID)), na.rm = TRUE),
@@ -97,20 +110,16 @@ predict_stats <- function(first_name, last_name, current_year) {
       pred_r = weighted.mean(R, w = exp(yearID - min(yearID)), na.rm = TRUE),
       pred_rbi = weighted.mean(RBI, w = exp(yearID - min(yearID)),
                                na.rm = TRUE),
-      pred_bb = weighted.mean(BB, w = exp(yearID - min(yearID)),
-                              na.rm = TRUE),
+      pred_bb = weighted.mean(BB, w = exp(yearID - min(yearID)) / (1 + BB), na.rm = TRUE),
       pred_so = weighted.mean(SO, w = exp(yearID - min(yearID)), na.rm = TRUE),
-      pred_sb = weighted.mean(SB, w = exp(yearID - min(yearID)), na.rm = TRUE),
-      pred_obp = weighted.mean(OBP, w = exp(yearID - min(yearID)),
-                               na.rm = TRUE),
-      pred_slg = weighted.mean(SLG, w = exp(yearID - min(yearID)), na.rm = TRUE)
+      pred_sb = weighted.mean(SB, w = exp(yearID - min(yearID)), na.rm = TRUE)
     ) %>%
     filter(next_year == current_year)
 
   age_adjustment <- similar_players %>%
     group_by(age) %>%
     summarize(
-      avg_change_ba = weighted.mean(BA - lag(BA), w = AB, na.rm = TRUE),
+      avg_change_g = weighted.mean(G - lag(G), w = AB, na.rm = TRUE),
       avg_change_hr = weighted.mean(HR - lag(HR), w = AB, na.rm = TRUE),
       avg_change_h = weighted.mean(H - lag(H), w = AB, na.rm = TRUE),
       avg_change_2b = weighted.mean(X2B - lag(X2B), w = AB, na.rm = TRUE),
@@ -121,8 +130,6 @@ predict_stats <- function(first_name, last_name, current_year) {
       avg_change_bb = weighted.mean(BB - lag(BB), w = AB, na.rm = TRUE),
       avg_change_so = weighted.mean(SO - lag(SO), w = AB, na.rm = TRUE),
       avg_change_sb = weighted.mean(SB - lag(SB), w = AB, na.rm = TRUE),
-      avg_change_obp = weighted.mean(OBP - lag(OBP), w = AB, na.rm = TRUE),
-      avg_change_slg = weighted.mean(SLG - lag(SLG), w = AB, na.rm = TRUE)
     )
 
   player_age <- player_data %>%
@@ -134,20 +141,29 @@ predict_stats <- function(first_name, last_name, current_year) {
 
   next_year_stats <- next_year_stats %>%
     mutate(
-      pred_ba = pred_ba + age_correction$avg_change_ba,
-      pred_hr = pred_hr + age_correction$avg_change_hr,
-      pred_h = pred_h + age_correction$avg_change_h,
-      pred_2b = pred_2b + age_correction$avg_change_2b,
-      pred_3b = pred_3b + age_correction$avg_change_3b,
-      pred_ab = pred_ab + age_correction$avg_change_ab,
-      pred_r = pred_r + age_correction$avg_change_r,
-      pred_rbi = pred_rbi + age_correction$avg_change_rbi,
-      pred_bb = pred_bb + age_correction$avg_change_bb,
-      pred_so = pred_so + age_correction$avg_change_so,
-      pred_sb = pred_sb + age_correction$avg_change_sb,
-      pred_obp = pred_obp + age_correction$avg_change_obp,
-      pred_slg = pred_slg + age_correction$avg_change_slg,
+      pred_g = pred_g + ifelse(!is.nan(age_correction$avg_change_g), age_correction$avg_change_g, 0),
+      pred_ba = pred_h / pred_ab,
+      pred_hr = pred_hr + ifelse(!is.nan(age_correction$avg_change_hr), age_correction$avg_change_hr, 0),
+      pred_h = pred_h + ifelse(!is.nan(age_correction$avg_change_h), age_correction$avg_change_h, 0),
+      pred_2b = pred_2b + ifelse(!is.nan(age_correction$avg_change_2b), age_correction$avg_change_2b, 0),
+      pred_3b = pred_3b + ifelse(!is.nan(age_correction$avg_change_3b), age_correction$avg_change_3b, 0),
+      pred_ab = pred_ab + ifelse(!is.nan(age_correction$avg_change_ab), age_correction$avg_change_ab, 0),
+      pred_r = pred_r + ifelse(!is.nan(age_correction$avg_change_r), age_correction$avg_change_r, 0),
+      pred_rbi = pred_rbi + ifelse(!is.nan(age_correction$avg_change_rbi), age_correction$avg_change_rbi, 0),
+      pred_bb = pred_bb + ifelse(!is.nan(age_correction$avg_change_bb), age_correction$avg_change_bb, 0),
+      pred_so = pred_so + ifelse(!is.nan(age_correction$avg_change_so), age_correction$avg_change_so, 0),
+      pred_sb = pred_sb + ifelse(!is.nan(age_correction$avg_change_sb), age_correction$avg_change_sb, 0),
+      pred_obp = ifelse(!is.nan(pred_h) & !is.nan(pred_bb) & !is.nan(pred_ab) & pred_ab != 0, 
+                        (pred_h + pred_bb) / (pred_ab + pred_bb),
+                        NA_real_),
+      pred_slg = ifelse(!is.nan(pred_2b) & !is.nan(pred_3b) & !is.nan(pred_hr) & !is.nan(pred_h) & !is.nan(pred_ab) & pred_ab != 0, 
+                        (pred_2b * 2 + pred_3b * 3 + pred_hr * 4 + (pred_h - (pred_2b + pred_3b + pred_hr))) / pred_ab, 
+                        NA_real_)
     )
+
+  # Ensure that predicted games played do not exceed 162
+  next_year_stats$pred_g <- ifelse(next_year_stats$pred_g > 162, 162, next_year_stats$pred_g)
+
 
   if (nrow(next_year_stats) == 0) {
     return(tibble(message = "No data available for prediction"))
@@ -156,10 +172,10 @@ predict_stats <- function(first_name, last_name, current_year) {
   return(next_year_stats)
 }
 
-test <- predict_stats("George", "Springer", 2024)
+test <- predict_stats("Ronald", "Acuna", 2024)
 View(test)
 
 test_df <- player_data %>%
-  filter(nameFirst == "Vladimir", nameLast == "Guerrero")
+  filter(nameFirst == "Salvador", nameLast == "Perez")
 test_df
 View(test_df)

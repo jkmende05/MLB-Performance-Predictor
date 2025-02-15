@@ -7,7 +7,7 @@ batting_data <- Batting %>%
   summarize(G, BA = sum(H) / sum(AB), HR = sum(HR), H = sum(H), X2B = sum(X2B),
             X3B = sum(X3B), AB = sum(AB), R = sum(R), RBI = sum(RBI),
             BB = sum(BB), SO = sum(SO), SB = sum(SB),
-            OBP = sum(H, BB, IBB, HBP) / sum(AB),
+            OBP = sum(H, BB, IBB, HBP) / sum(AB, BB, IBB, HBP),
             SLG = (sum(X2B) * 2 + sum(X3B) * 3 +
                      sum(HR) * 4 + (sum(H) - sum(X2B, X3B, HR))) / sum(AB)) %>%
   na.omit()
