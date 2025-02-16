@@ -45,8 +45,8 @@ model_player_stats <- function(first_name, last_name, target_var) {
   )
 
   # Cross-validation to determine best rounds
-  xgb_cv <- xgb.cv(params = params, data = dtrain, nrounds = 250, nfold = 3,
-                    early_stopping_rounds = 10, verbose = 0)
+  xgb_cv <- xgb.cv(params = params, data = dtrain, nrounds = 200, nfold = 3,
+                  early_stopping_rounds = 10, verbose = 0)
 
   best_nrounds <- xgb_cv$best_iteration
 
@@ -187,52 +187,53 @@ predict_stats <- function(first_name, last_name, current_year) {
   return(next_year_stats)
 }
 
+predict_multiple_stats <- function(first_name, last_name, target_vars) {
+  predictions <- sapply(target_vars, function(target_var) {
+    model_player_stats(first_name, last_name, target_var)
+  })
+
+  predictions <- t(data.frame(predictions))
+
+  return(predictions)
+}
+
 get_predicted_stats <- function(first_name, last_name) {
   cluster_stats <- predict_stats(first_name, last_name, 2024)
   cluster_stats <- subset(cluster_stats, select = -c(next_year))
 
-  model_g <- model_player_stats(first_name, last_name, "G")
-  model_hr <- model_player_stats(first_name, last_name, "HR")
-  model_h <- model_player_stats(first_name, last_name, "H")
-  model_2b <- model_player_stats(first_name, last_name, "X2B")
-  model_3b <- model_player_stats(first_name, last_name, "X3B")
-  model_ab <- model_player_stats(first_name, last_name, "AB")
-  model_r <- model_player_stats(first_name, last_name, "R")
-  model_rbi <- model_player_stats(first_name, last_name, "RBI")
-  model_bb <- model_player_stats(first_name, last_name, "BB")
-  model_so <- model_player_stats(first_name, last_name, "SO")
-  model_sb <- model_player_stats(first_name, last_name, "SB")
+  target_vars <- c("G", "HR", "H", "X2B", "X3B", "AB", "R",
+                   "RBI", "BB", "SO", "SB")
+  player_predictions <- predict_multiple_stats(first_name,
+                                               last_name, target_vars)
 
-  model_stats <- data.frame(
-    pred_g = model_g,
-    pred_hr = model_hr,
-    pred_h = model_h,
-    pred_2b = model_2b,
-    pred_3b = model_3b,
-    pred_ab = model_ab,
-    pred_r = model_r,
-    pred_rbi = model_rbi,
-    pred_bb = model_bb,
-    pred_so = model_so,
-    pred_sb = model_sb,
-    pred_ba = model_h / model_ab,
-    pred_obp = (model_h + model_bb) / (model_ab + model_bb),
-    pred_slg = (model_2b * 2 + model_3b * 3 + model_hr * 4 +
-                  (model_h - (model_2b + model_3b + model_hr))) / model_ab
-  )
+  colnames(player_predictions) <- c("pred_g", "pred_hr", "pred_h",
+                                    "pred_2b", "pred_3b", "pred_ab", "pred_r",
+                                    "pred_rbi", "pred_bb", "pred_so", "pred_sb")
+  player_predictions <- data.frame(player_predictions)
+  player_predictions <- player_predictions %>%
+    mutate(
+      pred_ba = pred_h / pred_ab,
+      pred_obp = (pred_h + pred_bb) / (pred_ab + pred_bb),
+      pred_slg = (pred_2b * 2 + pred_3b * 3 + pred_hr * 4 +
+                    (pred_h - sum(pred_2b, pred_3b, pred_hr))) / pred_ab
+    )
 
   # Calculate the average row
-  average_predicted_stats <- colMeans(rbind(cluster_stats, model_stats))
+  average_predicted_stats <- colMeans(rbind(cluster_stats, player_predictions))
 
   # Create a new data frame with the average row
   average_predictions <- data.frame(average_predicted_stats)
+
   return(average_predictions)
 }
 
-test_one <- get_predicted_stats("Bo", "Bichette")
+test_one <- get_predicted_stats("George", "Springer")
 View(test_one)
 
 test_df <- player_data %>%
   filter(nameFirst == "Salvador", nameLast == "Perez")
 test_df
 View(test_df)
+
+View(player_predictions)
+class(player_predictions)
