@@ -223,17 +223,19 @@ get_predicted_stats <- function(first_name, last_name) {
 
   # Create a new data frame with the average row
   average_predictions <- data.frame(average_predicted_stats)
+  average_predictions <- data.frame(t(average_predictions))
+  average_predictions <- average_predictions %>%
+  select(pred_g, pred_ba, pred_hr, pred_h, pred_2b, pred_3b,
+         pred_ab, pred_r, pred_rbi, pred_bb, pred_so,
+         pred_sb, pred_obp, pred_slg)
 
   return(average_predictions)
 }
 
-test_one <- get_predicted_stats("George", "Springer")
-View(test_one)
-
-test_df <- player_data %>%
-  filter(nameFirst == "Salvador", nameLast == "Perez")
-test_df
-View(test_df)
-
-View(player_predictions)
-class(player_predictions)
+get_past_stats <- function(first_name, last_name) {
+  past_player_stats <- player_data %>%
+    filter(nameFirst == first_name, nameLast == last_name)
+  past_player_stats <- subset(past_player_stats,
+                              select = -c(Cluster, birthYear, nameFirst, nameLast))
+  return(past_player_stats)
+}
