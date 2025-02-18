@@ -5,17 +5,19 @@ library(later)
 
 source("stat_prediction.R")
 
-# UI
 ui <- dashboardPage(
   dashboardHeader(title = "MLB 2024 Batting Stats Predictor", titleWidth = 350),
   dashboardSidebar(
     collapsed = FALSE,
     sidebarMenu(
-      menuItem("Stat Predictions", tabName = "prediction", icon = icon("chart-simple")),
-      menuItem("Instructions", tabName = "instructions", icon = icon("question"))
+      menuItem("Stat Predictions", tabName = "prediction",
+               icon = icon("chart-simple")),
+      menuItem("Player ID Lookup", tabName = "player_id_lookup",
+               icon = icon("magnifying-glass")),
+      menuItem("Instructions", tabName = "instructions",
+               icon = icon("question"))
     ),
-    textInput("first_name", "Player First Name:", value = "First Name"),
-    textInput("last_name", "Player Last Name:", value = "Last Name"),
+    textInput("player_id", "Player ID:", value = "player_id"),
     actionButton("predict_button", "Get Predicted Stats")
   ),
   dashboardBody(
@@ -38,10 +40,10 @@ ui <- dashboardPage(
           width: 15px;
         }
         .sidebar .action-button {
-          display: block;          /* Make the button a block-level element */
-          margin-left: auto;       /* Auto margin for centering */
-          margin-right: auto;      /* Auto margin for centering */
-          width: 87%;              /* Optional: Adjust button width */
+          display: block;
+          margin-left: auto;
+          margin-right: auto;
+          width: 87%;
         }
         .instructions_box .box-header {
           background-color: #BF0D3E !important;
@@ -53,6 +55,12 @@ ui <- dashboardPage(
           background-color: #BF0D3E !important;
         }
         .predictions_box .box{
+          border-color: #BF0D3E !important;
+        }
+        .lookup_box .box-header {
+          background-color: #BF0D3E !important;
+        }
+        .lookup_box .box{
           border-color: #BF0D3E !important;
         }
         .table-title {
@@ -85,11 +93,31 @@ ui <- dashboardPage(
             p("Enter a valid first and last name and then click the 'Get
              Predicted Stats' button."),
             tags$h3(class = "table-title", "Career Stats"),
-            div(class = "scrollable-table table-container", tableOutput("past_stats_table")),
+            div(class = "scrollable-table table-container",
+                tableOutput("past_stats_table")),
             tags$h3(class = "table-title", "2024 Predicted Stats"),
-            div(class = "scrollable-table table-container", tableOutput("prediction_table"))
+            div(class = "scrollable-table table-container",
+                tableOutput("prediction_table"))
           ),
           class = "predictions_box"
+        )
+      ),
+      tabItem(
+        tabName = "player_id_lookup",
+        fluidRow(
+          box(
+            title = "Player ID Lookup", width = 12, status = "primary",
+            solidHeader = TRUE,
+            p("Since throughout MLB History, there have been players with 
+            the same name, use their unique ID to get predicted stats. Use 
+            below to determine your desired player's ID."),
+            textInput("first_name", "Player First Name:", value = "First Name"),
+            textInput("last_name", "Player Last Name:", value = "First Name"),
+            actionButton("lookup_button", "Find Player ID"),
+            div(class = "scrollable-table table-container",
+                tableOutput("player_id_table"))
+          ),
+          class = "lookup_box"
         )
       ),
       tabItem(
@@ -121,13 +149,31 @@ ui <- dashboardPage(
 )
 
 server <- function(input, output, session) {
-  # Step 1: Observe when the predict button is clicked to get past stats immediately
-  observeEvent(input$predict_button, {
+  observeEvent(input$lookup_button, {
     req(input$first_name, input$last_name)
+
+    player_id_data <- tryCatch({
+      player_name_data(input$first_name, input$last_name)
+    }, error = function(e) {
+      NULL
+    })
+
+    if (is.null(player_id_data) || nrow(player_id_data) < 1) {
+      output$player_id_table <- renderTable({
+        tibble(Error = "Error: Player not found or data issue.")
+      })
+    } else {
+      output$player_id_table <- renderTable({
+        player_id_data
+      })
+    }
+  })
+  observeEvent(input$predict_button, {
+    req(input$player_id)
 
     # Fetch past stats synchronously
     past_stats <- tryCatch({
-      get_past_stats(input$first_name, input$last_name)
+      get_past_stats(input$player_id)
     }, error = function(e) {
       NULL
     })
@@ -153,9 +199,8 @@ server <- function(input, output, session) {
     session$sendCustomMessage("triggerPrediction", list())
   })
 
-  # Step 3: Handle prediction in a separate observer (allows immediate past stats display)
   observeEvent(session$input$triggerPrediction, {
-    req(input$first_name, input$last_name)
+    req(input$player_id)
 
     output$prediction_table <- renderTable({
       tibble()
@@ -165,7 +210,7 @@ server <- function(input, output, session) {
       incProgress(0.3, detail = "Currently training model...")
 
       past_stats <- tryCatch({
-        get_past_stats(input$first_name, input$last_name)
+        get_past_stats(input$player_id)
       }, error = function(e) {
         NULL
       })
@@ -179,7 +224,7 @@ server <- function(input, output, session) {
         })
       } else {
         predictions <- tryCatch({
-          get_predicted_stats(input$first_name, input$last_name)
+          get_predicted_stats(input$player_id)
         }, error = function(e) {
           NULL
         })
@@ -197,8 +242,10 @@ server <- function(input, output, session) {
           predictions <- predictions %>%
             mutate(across(all_of(decimal_col), ~ round(., 3))) %>%
             mutate(across(all_of(decimal_col), ~ format(., nsmall = 3))) %>%
-            mutate(across(setdiff(names(predictions), decimal_col), ~ round(., 0))) %>%
-            mutate(across(setdiff(names(predictions), decimal_col), ~ format(., nsmall = 0)))
+            mutate(across(setdiff(names(predictions), decimal_col),
+                          ~ round(., 0))) %>%
+            mutate(across(setdiff(names(predictions), decimal_col),
+                          ~ format(., nsmall = 0)))
           output$prediction_table <- renderTable({
             predictions
           })
@@ -207,11 +254,8 @@ server <- function(input, output, session) {
         incProgress(1, detail = "Finalizing...")
       }
     })
-  }, ignoreInit = TRUE)  # Avoid running twice on first button click
+  }, ignoreInit = TRUE)
 }
 
 # Run the application
 shinyApp(ui, server)
-
-# Remaining Things:
-# Players with same first and last name (give option to select by id number) <- only take in playerid number, give option for player look up to find id number, could have it in sidebar

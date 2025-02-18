@@ -3,6 +3,7 @@ library(cluster)
 player_data <- readRDS("data//player_data.rds")
 head(player_data)
 
+# Cluster players together based on statistics and player information
 cluster_features <- player_data %>%
   select(height, weight, age, BA, HR, H, X2B, X3B, AB, R, RBI, G, BB, SO, SB,
          OBP, SLG, bats, throws)

@@ -9,7 +9,8 @@ player_data <- readRDS("data//player_cluster_data.rds")
 
 head(player_data)
 
-model_player_stats <- function(first_name, last_name, target_var) {
+# Use machine learning and XGBoost to predict player stats
+model_player_stats <- function(player_id, target_var) {
   player_data <- player_data %>%
     mutate(bats = as.factor(bats),
            throws = as.factor(throws))
@@ -18,11 +19,11 @@ model_player_stats <- function(first_name, last_name, target_var) {
   player_data_clean <- player_data %>%
     filter(!is.na(.[[target_var]]))
 
-  # Feature selection (Cluster removed)
+  # Feature selection
   features <- player_data_clean %>%
     select(G, BA, HR, H, X2B, X3B, AB, R, RBI, BB, SO, SB, OBP, SLG,
            age, height, weight) %>%
-    mutate(across(c(age, height, weight), scale))  # Normalize
+    mutate(across(c(age, height, weight), scale)) 
 
   # Define target and remove it from features
   target <- player_data_clean[[target_var]]
@@ -35,8 +36,8 @@ model_player_stats <- function(first_name, last_name, target_var) {
   params <- list(
     objective = "reg:squarederror",
     max_depth = 4,
-    eta = 0.02,  # Smaller learning rate
-    min_child_weight = 5,  # Prevents overfitting
+    eta = 0.02,
+    min_child_weight = 5,
     subsample = 0.8,
     colsample_bytree = 0.8,
     eval_metric = "rmse",
@@ -44,21 +45,20 @@ model_player_stats <- function(first_name, last_name, target_var) {
     alpha = 0.5
   )
 
-  # Cross-validation to determine best rounds
   xgb_cv <- xgb.cv(params = params, data = dtrain, nrounds = 200, nfold = 3,
-                  early_stopping_rounds = 10, verbose = 0)
+                   early_stopping_rounds = 10, verbose = 0)
 
   best_nrounds <- xgb_cv$best_iteration
 
-  # Train final model
+  # Train model
   model <- xgboost(params = params, data = dtrain,
                    nrounds = best_nrounds, verbose = 0)
 
-  # Get the latest stats of the player
+  # Get past stats of the player
   latest_data <- player_data_clean %>%
-    filter(nameFirst == first_name, nameLast == last_name) %>%
-    arrange(desc(yearID)) %>%  # Ensure data is sorted by year
-    slice_head(n = 1)  # Get the latest available row
+    filter(playerID == player_id) %>%
+    arrange(desc(yearID)) %>% 
+    slice_head(n = 1) 
 
   # Create a new row for next year
   next_year_data <- latest_data %>%
@@ -73,18 +73,20 @@ model_player_stats <- function(first_name, last_name, target_var) {
            age, height, weight) %>%
     mutate(across(c(age, height, weight), scale))
   predict_features <- predict_features %>% select(-all_of(target_var))
+
   # Convert to matrix
   predict_matrix <- as.matrix(predict_features)
 
-  # Predict next year's value
+  # Predict next year's value and return
   pred_value <- predict(model, predict_matrix)
 
   return(pred_value)
 }
 
-predict_stats <- function(first_name, last_name, current_year) {
+# Predict stats using clustering
+predict_stats <- function(player_id, current_year) {
   player_cluster <- player_data %>%
-    filter(nameFirst == first_name, nameLast == last_name) %>%
+    filter(playerID == player_id) %>%
     select(Cluster)
 
   if (nrow(player_cluster) == 0) {
@@ -96,6 +98,8 @@ predict_stats <- function(first_name, last_name, current_year) {
   similar_players <- player_data %>%
     filter(Cluster == cluster_value, yearID < current_year)
 
+  # Predict stats based on clusters using weighted.mean
+  # Applies more weight or emphasis on more recent years
   next_year_stats <- similar_players %>%
     group_by(next_year = yearID + 1) %>%
     summarize(
@@ -115,6 +119,7 @@ predict_stats <- function(first_name, last_name, current_year) {
     ) %>%
     filter(next_year == current_year)
 
+  # Apply age adjustment to statistics
   age_adjustment <- similar_players %>%
     group_by(age) %>%
     summarize(
@@ -132,7 +137,7 @@ predict_stats <- function(first_name, last_name, current_year) {
     )
 
   player_age <- player_data %>%
-    filter(nameFirst == first_name, nameLast == last_name) %>%
+    filter(playerID == player_id) %>%
     pull(age)
 
   age_correction <- age_adjustment %>%
@@ -187,9 +192,10 @@ predict_stats <- function(first_name, last_name, current_year) {
   return(next_year_stats)
 }
 
-predict_multiple_stats <- function(first_name, last_name, target_vars) {
+# Run XGBoost predictions and store in data frame
+predict_multiple_stats <- function(player_id, target_vars) {
   predictions <- sapply(target_vars, function(target_var) {
-    model_player_stats(first_name, last_name, target_var)
+    model_player_stats(player_id, target_var)
   })
 
   predictions <- t(data.frame(predictions))
@@ -197,14 +203,14 @@ predict_multiple_stats <- function(first_name, last_name, target_vars) {
   return(predictions)
 }
 
-get_predicted_stats <- function(first_name, last_name) {
-  cluster_stats <- predict_stats(first_name, last_name, 2024)
+# Use both models to get final player predictions
+get_predicted_stats <- function(player_id) {
+  cluster_stats <- predict_stats(player_id, 2024)
   cluster_stats <- subset(cluster_stats, select = -c(next_year))
 
   target_vars <- c("G", "HR", "H", "X2B", "X3B", "AB", "R",
                    "RBI", "BB", "SO", "SB")
-  player_predictions <- predict_multiple_stats(first_name,
-                                               last_name, target_vars)
+  player_predictions <- predict_multiple_stats(player_id, target_vars)
 
   colnames(player_predictions) <- c("pred_g", "pred_hr", "pred_h",
                                     "pred_2b", "pred_3b", "pred_ab", "pred_r",
@@ -225,17 +231,43 @@ get_predicted_stats <- function(first_name, last_name) {
   average_predictions <- data.frame(average_predicted_stats)
   average_predictions <- data.frame(t(average_predictions))
   average_predictions <- average_predictions %>%
-  select(pred_g, pred_ba, pred_hr, pred_h, pred_2b, pred_3b,
-         pred_ab, pred_r, pred_rbi, pred_bb, pred_so,
-         pred_sb, pred_obp, pred_slg)
+    select(pred_g, pred_ba, pred_hr, pred_h, pred_2b, pred_3b,
+           pred_ab, pred_r, pred_rbi, pred_bb, pred_so,
+           pred_sb, pred_obp, pred_slg)
 
   return(average_predictions)
 }
 
-get_past_stats <- function(first_name, last_name) {
+# Get career stats for a player to display
+get_past_stats <- function(player_id) {
   past_player_stats <- player_data %>%
-    filter(nameFirst == first_name, nameLast == last_name)
+    filter(playerID == player_id)
   past_player_stats <- subset(past_player_stats,
-                              select = -c(Cluster, birthYear, nameFirst, nameLast))
+                              select = -c(Cluster, birthYear, nameFirst,
+                                          nameLast))
   return(past_player_stats)
+}
+
+# Sort player data by name to get ID, used in app
+player_name_data <- function(first_name, last_name) {
+  summarize_player_data <- player_data %>%
+    filter(nameFirst == first_name, nameLast == last_name)
+
+  if (nrow(summarize_player_data) == 0) {
+    return(NULL)
+  }
+  
+  summarize_player_data <- summarize_player_data %>%
+    group_by(playerID) %>%
+    summarize(
+      year_range = paste(min(yearID), max(yearID), sep = " - "),
+      bats = first(bats),
+      throws = first(throws),
+      height = first(height),
+      weight = first(weight),
+      birthYear = first(birthYear)
+    ) %>%
+    arrange(playerID)
+
+  return(summarize_player_data)
 }
